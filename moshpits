@@ -1,0 +1,267 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib
+from matplotlib.animation import FuncAnimation
+from matplotlib import animation
+import matplotlib as mpl
+from itertools import combinations
+mpl.rcParams['agg.path.chunksize'] = 10000
+
+# This is working really well, main not is self propulsion is kinda whack might need to be adjusted
+
+dt = 0.01 # 0.01 give more accurate depiction but 0.1 works fine just a little bit more chaotic.
+T = np.arange(0, 100, dt)
+N = 500
+
+r_0 = 1
+R = 2 * r_0
+FR = 2 * R
+v_0 = 1
+
+L = 1.03 * np.sqrt(np.pi * r_0 * N) # simulation box size
+#L = 10
+epsilon = 100
+flock = 0.1
+noise = 2.0
+damp = 1
+frac = 0.15
+active = round(N * frac) # Number of active particles
+
+### Set up initial Conditions ###
+
+x = np.zeros((N, len(T)))
+y = np.zeros((N, len(T)))
+v_x = np.zeros((N, len(T)))
+v_y = np.zeros((N, len(T)))
+
+for i in range(active):
+
+    x[i][0] = np.random.uniform(0, L)
+    y[i][0] = np.random.uniform(0, L)
+
+
+for i in range(active, N):
+
+    x[i][0] = np.random.uniform(0, L)
+    y[i][0] = np.random.uniform(0, L)
+
+
+### Useful Functions ###
+
+def distance_ij(x, y, i, t):
+
+    dist = np.zeros(N)
+
+    rdir = np.zeros((N, 2))
+    
+    for j in range(N):
+        
+        if x[j][t] != 0 or y[j][t] != 0:
+
+            r_x = x[j][t] - x[i][t]
+            r_y = y[j][t] - y[i][t]
+
+            dist[j] = np.sqrt(r_x ** 2 + r_y ** 2)
+
+            theta = np.arctan2(r_y, r_x)
+
+            rdir[j][0] = np.cos(theta)
+            rdir[j][1] = np.sin(theta)
+
+    return dist, rdir
+
+def velocity_i(v_x, v_y, i, t):
+
+    vx = v_x[i][t]
+
+    vy = v_y[i][t]
+
+    vel = np.sqrt(vx ** 2 + vy ** 2)
+
+    phi = np.arctan2(vy, vx)
+
+    vdir = [np.cos(phi), np.sin(phi)]
+
+    return vel, vdir
+
+
+def acceleration_i(x, y, v_x, v_y, i, t):
+
+    a_x = 0
+
+    a_y = 0
+
+    d_x = 0
+
+    d_y = 0
+
+    v = velocity_i(v_x, v_y, i, t)[0]
+    vhat = velocity_i(v_x, v_y, i, t)[1]
+
+    r = distance_ij(x, y, i, t)[0]
+    rhat = distance_ij(x, y, i, t)[1]
+
+    if i < active:
+        ### Forces ###
+        
+        # Noise:
+        a_x += noise * (np.random.random()-0.5)
+        a_y += noise * (np.random.random()-0.5)
+
+        # Propulsion:
+        a_x += damp * (v_0 - v) * vhat[0]# Shouldnt vlen be sqrt
+        a_y += damp * (v_0 - v) * vhat[1]
+
+        for j in range(N):
+
+            if r[j] < FR and r[j] != 0:
+                d_x += v_x[j][t]
+                d_y += v_y[j][t]
+
+                # Repulsion:
+                if r[j] < R:
+
+                    a_x += -epsilon * ((1 - r[j]/(2*r_0)) ** 2) * rhat[j][0]
+                    a_y += -epsilon * ((1 - r[j]/(2*r_0)) ** 2) * rhat[j][1] # this minus needs to be discussed
+    else:
+        
+        # Propulsion:
+        a_x += damp * (0 - v) * vhat[0]
+        a_y += damp * (0 - v) * vhat[1]
+
+        for j in range(N):
+
+            # Repulsion:
+            if r[j] < R and r[j] != 0:
+
+                a_x += -epsilon * ((1 - r[j]/(2*r_0)) ** 2) * rhat[j][0]
+                a_y += -epsilon * ((1 - r[j]/(2*r_0)) ** 2) * rhat[j][1]
+    
+    norm = np.sqrt((d_x) ** 2 + (d_y) ** 2)
+    if norm > 1e-6:
+        
+        a_x += flock * d_x/norm
+        a_y += flock * d_y/norm
+
+    return a_x, a_y
+#print(acceleration_i(x, y, v_x, v_y, i, 0)[0])
+def verlet(x, y, v_x, v_y, T, dt):
+
+    # Initial values 
+    for i in range(N):
+
+        A = acceleration_i(x, y, v_x, v_y, i, 0)
+
+        x[i][1] = x[i][0] + v_x[i][0] * dt + 1/2 * A[0] * dt ** 2
+        y[i][1] = y[i][0] + v_y[i][0] * dt + 1/2 * A[1] * dt ** 2
+
+        A = 0
+
+        x[i][1] = x[i][1] % L
+        y[i][1] = y[i][1] % L
+
+
+    for ts in range(1, len(T)-1):
+
+        print(ts /(len(T)-1) * 100)
+        
+        for i in range(N):
+            # Change this to a better integrator, mabye even velocity verlet or something else?
+            A = acceleration_i(x, y, v_x, v_y, i, ts-1)
+            
+            v_x[i][ts] = v_x[i][ts-1] + A[0] * dt #smaller dt makes more accurate, however makes programme slow
+            v_y[i][ts] = v_y[i][ts-1] + A[1] * dt
+            
+            A = 0
+            A = acceleration_i(x, y, v_x, v_y, i, ts)
+
+            # Actual verlet, using [0] as only main box is integrated the rest are mere imitations
+
+            x[i][ts+1] = (2 * x[i][ts] - x[i][ts-1] + A[0] * dt ** 2) % L
+            y[i][ts+1] = (2 * y[i][ts] - y[i][ts-1] + A[1] * dt ** 2) % L
+
+            A = 0
+
+    return x, y
+
+def integrator(x, y, v_x, v_y, T, dt):
+    for ts in range(len(T) - 1):
+
+        print(ts /(len(T)-1) * 100)
+            
+        for i in range(N):
+
+            A = acceleration_i(x, y, v_x, v_y, i, ts)
+
+            v_x[i][ts+1] = v_x[i][ts] + A[0] * dt
+            v_y[i][ts+1] = v_y[i][ts] + A[1] * dt
+
+            x[i][ts+1] = (x[i][ts] + A[0] * dt) % L
+            y[i][ts+1] = (y[i][ts] + A[1] * dt) % L
+
+            A = 0
+
+    return x, y
+
+
+ans = verlet(x, y, v_x, v_y, T, dt)
+#ans = integrator(x, y, v_x, v_y, T, dt)
+
+masher_x = ans[0]
+masher_y = ans[1]
+
+
+### Plotting ###
+
+# Time to plot
+    
+fig, axes = plt.subplots(1, 1, figsize=(5,5))
+#"""
+def animate(t):
+    axes.clear()
+    ax = axes
+    circles_red = [plt.Circle((masher_x[i][10*t], masher_y[i][10*t]), radius= r_0, linewidth=0) for i in range(active)]
+    #arrow_red = [plt.arrow(masher_x[i][10*t], masher_y[i][10*t], masher_x[i][10*(t) + 1], masher_y[i][10*(t) + 1] ) for i in range(Perc)] 
+    circles_black = [plt.Circle((masher_x[i][10*t], masher_y[i][10*t]), radius= r_0, linewidth=0) for i in range(active, N)]
+    
+    cred = matplotlib.collections.PatchCollection(circles_red, facecolors='red')
+    cblack = matplotlib.collections.PatchCollection(circles_black, facecolors='black')
+    #ared = matplotlib.collections.PatchCollection(arrow_red, facecolors='red') # Make arrows work
+    ax.add_collection(cblack)
+    ax.add_collection(cred)
+    #ax.add_collection(ared)
+
+    ax.set(xlim=(0, L), ylim=(0, L)) 
+    
+    ax.set_title("Time: {}".format(np.round(T[10*t], decimals = 2)))
+#"""
+"""
+def animate(t):
+    axes.clear()
+    ax = axes
+    circles_red = [plt.Circle((masher_x[i][t], masher_y[i][t]), radius= r_0, linewidth=0) for i in range(active)]
+    #arrow_red = [plt.arrow(masher_x[i][10*t], masher_y[i][10*t], masher_x[i][10*(t) + 1], masher_y[i][10*(t) + 1] ) for i in range(Perc)] 
+    circles_black = [plt.Circle((masher_x[i][t], masher_y[i][t]), radius= r_0, linewidth=0) for i in range(active, N)]
+    
+    cred = matplotlib.collections.PatchCollection(circles_red, facecolors='red')
+    cblack = matplotlib.collections.PatchCollection(circles_black, facecolors='black')
+    #ared = matplotlib.collections.PatchCollection(arrow_red, facecolors='red') # Make arrows work
+    ax.add_collection(cblack)
+    ax.add_collection(cred)
+    #ax.add_collection(ared)
+
+    ax.set(xlim=(0, L), ylim=(0, L)) 
+    
+    ax.set_title("Time: {}".format(np.round(T[t], decimals = 2)))
+"""
+
+#ani = animation.FuncAnimation(fig, animate, frames=len(T), interval=100, blit=False)
+
+#plt.legend()
+#plt.show()
+
+## Save animation ##
+
+saveani  = animation.FuncAnimation(fig, animate, frames=400, interval=10, blit=False) # New animation fucntion with less frames so we can save the gif.
+saveani.save("Masher-ANI_500_working_0.01.gif", dpi=300, fps=60)
+
