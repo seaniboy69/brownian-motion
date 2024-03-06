@@ -1,0 +1,263 @@
+import numpy as np
+from scipy.integrate import odeint
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib import animation
+import matplotlib as mpl
+from itertools import combinations
+mpl.rcParams['agg.path.chunksize'] = 10000
+
+dt = 1
+T = np.arange(0, 4, dt)
+eps = 25
+
+u = 1
+
+r_0 = 1
+v_0 = 1
+N = 10
+
+#L = 1.03 * np.sqrt(np.pi * r_0 * N) # simulation box size
+L = 10
+
+Perc = N // 10 * 3
+
+alpha = 1 # varied
+
+sigma = 1 # varied
+
+# Set up matrices and their images
+
+x = np.zeros((9,N, len(T)))
+y = np.zeros((9,N, len(T)))
+v_x = np.zeros((N, len(T)))
+v_y = np.zeros((N, len(T)))
+
+#print(x) # x[Image box, 0 being main box][Masher][Timestep]
+for i in range(N):
+
+    x[0][i][0] = np.random.uniform(0, L)
+    y[0][i][0] = np.random.uniform(0, L)
+    v_x[i][0] = np.random.uniform(0, L)
+    v_y[i][0] = np.random.uniform(0, L)
+
+#print(x)
+    
+### Functions to do forces and images ### 
+    
+def check_boundaries(x, y, L, t):
+    # checks if masher is outside unit cell then move back
+
+    for i in range(N):
+
+        while x[0][i][t] > L:
+            x[0][i][t] = x[0][i][t] - L
+
+        while x[0][i][t] < 0:
+            x[0][i][t] = x[0][i][t] + L 
+
+        while y[0][i][t] > L:
+            y[0][i][t] = y[0][i][t] - L
+
+        while y[0][i][t] < 0:
+            y[0][i][t] = y[0][i][t] + L 
+    
+
+check_boundaries(x, y, L, 0)
+
+def replic(x, y,t):
+
+    for i in range(N):
+
+        # Move to box 1, in upper left
+        x[1][i][t] = x[0][i][t] - L
+        y[1][i][t] = y[0][i][t] + L
+
+        # Move to box 2, upper center
+        x[2][i][t] = x[0][i][t]
+        y[2][i][t] = y[0][i][t] + L
+
+        # Move to box 3, upper right
+        x[3][i][t] = x[0][i][t] + L
+        y[3][i][t] = y[0][i][t] + L
+
+        # Move to box 4, right center
+        x[4][i][t] = x[0][i][t] + L
+        y[4][i][t] = y[0][i][t]
+
+        # Move to box 5, bottom right
+        x[5][i][t] = x[0][i][t] + L
+        y[5][i][t] = y[0][i][t] - L
+
+        # Move to box 6 bottom center
+        x[6][i][t] = x[0][i][t]
+        y[6][i][t] = y[0][i][t] - L
+
+        # Move to box 7 bottom left
+        x[7][i][t] = x[0][i][t] - L
+        y[7][i][t] = y[0][i][t] - L
+
+        # Move to box 8 left center
+        x[8][i][t] = x[0][i][t] - L
+        y[8][i][t] = y[1][i][t] + L
+
+#replic(x, y, 0)
+
+#print(x)
+
+def distance_ij(x, y, i, t):
+
+    dist = np.zeros((9,N))
+
+    rdir = np.zeros((9,N, 2))
+
+
+    for k in range(9):
+
+        for j in range(N):
+
+            r_x = x[k][j][t] - x[0][i][t]
+            r_y = y[k][j][t] - y[0][i][t]
+
+            dist[k][j] = np.sqrt(r_x ** 2 + r_y ** 2)
+
+            theta = np.arctan2(r_y, r_x)
+
+            rdir[k][j][0] = np.cos(theta)
+            rdir[k][j][1] = np.sin(theta)
+
+    return dist, rdir
+
+#testdist = distance_ij(x, y, 3, 0)[0] # for dist[distance from particle i to j's in box k][what particle is j]
+#print(testdist)
+
+#testrdir = distance_ij(x, y, 3, 0)[1] # corresponding direction for i to j in dist
+#print(testrdir)
+
+# Not adjusted from mosh2.py, hoepfully should be fine 
+def velocity_i(v_x, v_y, i, t):
+
+    vx = v_x[i][t]
+
+    vy = v_y[i][t]
+
+    vel = np.sqrt(vx ** 2 + vy ** 2)
+
+    phi = np.arctan2(vy, vx)
+
+    vdir = [np.cos(phi), np.sin(phi)]
+
+    return vel, vdir
+
+
+def acceleration_i(x, y, v_x, v_y, i, t):
+
+    a_x = 0
+
+    a_y = 0
+
+    n_x = 0
+
+    n_y = 0
+
+    v = velocity_i(v_x, v_y, i, t)[0]
+    vhat = velocity_i(v_x, v_y, i, t)[1]
+
+    r = distance_ij(x, y, i, t)[0]
+    rhat = distance_ij(x, y, i, t)[1]
+
+    if i < Perc: # if i is one of first 30% its an active masher 
+        ### Forces ###
+
+        # Noise:
+        a_x += np.random.normal(0.0, sigma)
+        a_y += np.random.normal(0.0, sigma)
+
+        # Propulsion:
+        a_x += u * (v_0 - v) * vhat[0]
+        a_y += u * (v_0 - v) * vhat[1]
+
+        for k in range(9):
+
+            for j in range(N):
+
+                # Flocking
+
+                if r[k][j] < 4 * r_0 and r[k][j] != 0:
+
+                    n_x += (v_x[j][t])
+                    n_y += (v_y[j][t])
+
+                    # Repulsion:
+                    if r[k][j] < 2 * r_0:
+
+                        a_x += eps * (1 - r[k][j]/(2*r_0)) ** 3/2 * rhat[k][j][0]
+                        a_y += eps * (1 - r[k][j]/(2*r_0)) ** 3/2 * rhat[k][j][1]
+
+
+    else:
+
+        # Propulsion:
+        a_x += u * (0 - v) * vhat[0]
+        a_y += u * (0 - v) * vhat[1]
+
+        for k in range(9):
+
+            for j in range(N):
+
+                # Repulsion:
+                if r[k][j] < 2 * r_0 and r[k][j] != 0:
+
+                    a_x += eps * (1 - r[k][j]/(2*r_0)) ** 3/2 * rhat[k][j][0]
+                    a_y += eps * (1 - r[k][j]/(2*r_0)) ** 3/2 * rhat[k][j][1]
+
+    # Flocking part 2, gotta add all x and y componets together seperatly to calculate norm
+                
+    if np.sqrt(n_x ** 2 + n_y ** 2) > 0: # ensure not dividing by zero
+
+        a_x += alpha * n_x/(np.sqrt(n_x ** 2 + n_y ** 2))
+        a_y += alpha * n_y/(np.sqrt(n_x ** 2 + n_y ** 2))
+
+    return a_x, a_y
+
+#testa_x = acceleration_i(x, y, v_x, v_y, 1, 0)[0] # Now works, error was making images for velocity, theres no need to do that
+#print(testa_x)
+
+def verlet(x, y, v_x, v_y, T, dt):
+
+    # Initial values 
+
+    check_boundaries(x, y, L, 0)
+    replic(x, y, 0)
+
+    for i in range(N):
+
+        A = acceleration_i(x, y, v_x, v_y, i, 0)
+
+        x[0][i][1] = x[0][i][0] + v_x[i][0] * dt + 1/2 * A[0] * dt ** 2
+        y[0][i][1] = y[0][i][0] + v_y[i][0] * dt + 1/2 * A[1] * dt ** 2
+
+    check_boundaries(x, y, L, 1)
+    replic(x, y, 1)
+
+    for ts in range(1, len(T)-1):
+
+        for i in range(N):
+
+            v_x[i][ts] = v_x[i][ts] + A[0] * dt
+            v_y[i][ts] = v_y[i][ts] + A[1] * dt
+            
+            A = 0
+            A = acceleration_i(x, y, v_x, v_y, i, ts)
+
+            # Actual verlet, using [0] as only main box is integrated the rest are mere imitations
+
+            x[0][i][ts+1] = 2 * x[0][i][ts] - x[0][i][ts-1] + A[0] * dt ** 2
+            y[0][i][ts+1] = 2 * y[0][i][ts] - y[0][i][ts-1] + A[1] * dt ** 2
+
+        check_boundaries(x, y, L, ts + 1)
+        replic(x, y, ts + 1)
+
+    return x, y
+
+print(verlet(x, y, v_x, v_y, T, dt)[0][0]) # It works? [0][0] gives you all x coords for all times
